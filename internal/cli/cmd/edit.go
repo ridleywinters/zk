@@ -13,7 +13,8 @@ import (
 
 // Edit opens notes matching a set of criteria with the user editor.
 type Edit struct {
-	Force bool `short:f help:"Do not confirm before editing many notes at the same time."`
+	Force    bool `short:f help:"Do not confirm before editing many notes at the same time."`
+	KeepOpen bool `short:"k" help:"Keep open after the editor exits."`
 	cli.Filtering
 }
 
@@ -48,32 +49,56 @@ func (cmd *Edit) Run(container *cli.Container) error {
 		return err
 	}
 
-	count := len(notes)
+	// Loop in case the KeepOpen option is enabled
+	for {
+		count := len(notes)
 
-	if count > 0 {
-		if !cmd.Force && count > 5 {
-			confirmed, skipped := container.Terminal.Confirm(fmt.Sprintf("Are you sure you want to open %v notes in the editor?", count), false)
-			if skipped {
-				return fmt.Errorf("too many notes to be opened in the editor, aborting…")
-			} else if !confirmed {
-				return nil
+		if count > 0 {
+			if !cmd.Force && count > 5 {
+				confirmed, skipped := container.Terminal.Confirm(fmt.Sprintf("Are you sure you want to open %v notes in the editor?", count), false)
+				if skipped {
+					return fmt.Errorf("too many notes to be opened in the editor, aborting…")
+				} else if !confirmed {
+					return nil
+				}
 			}
-		}
-		paths := make([]string, 0)
-		for _, note := range notes {
-			absPath := filepath.Join(notebook.Path, note.Path)
-			paths = append(paths, absPath)
+			paths := make([]string, 0)
+			for _, note := range notes {
+				absPath := filepath.Join(notebook.Path, note.Path)
+				paths = append(paths, absPath)
+			}
+
+			editor, err := container.NewNoteEditor(notebook)
+			if err != nil {
+				return err
+			}
+			err = editor.Open(paths...)
+			if err != nil {
+				return err
+			}
+
+		} else {
+			fmt.Fprintln(os.Stderr, "Found 0 notes.")
 		}
 
-		editor, err := container.NewNoteEditor(notebook)
-		if err != nil {
-			return err
+		// If KeepOpen is enabled, go back to note selection
+		if cmd.KeepOpen {
+			// Re-find notes and apply the filter (in case notes changed)
+			notes, err = notebook.FindNotes(findOpts)
+			if err != nil {
+				return err
+			}
+			notes, err = filter.Apply(notes)
+			if err != nil {
+				if err == fzf.ErrCancelled {
+					return nil
+				}
+				return err
+			}
+		} else {
+			// Exit after the edit if KeepOpen is not enabled
+			return nil
 		}
-		return editor.Open(paths...)
-
-	} else {
-		fmt.Fprintln(os.Stderr, "Found 0 notes.")
-		return nil
 	}
 }
 
